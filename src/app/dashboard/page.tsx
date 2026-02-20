@@ -1,0 +1,785 @@
+'use client';
+
+import { useState, useEffect, useMemo } from 'react';
+import { useRouter } from 'next/navigation';
+import { createClient } from "@/lib/supabase/client";
+import { ResponsiveLine } from '@nivo/line';
+import { ResponsivePie } from '@nivo/pie';
+import { ResponsiveBar } from '@nivo/bar';
+// import { MutatingDots } from 'react-loader-spinner';
+import { format, parseISO } from 'date-fns';
+import RiskLevelBadge from './elements/RiskLevelBadge';
+import TimeRangeSelector from './elements/TimeRangeSelector';
+import ECGLine from './ui/ECGLine';
+import SleepingEmoji from '../components/lottie/sleeping';
+import Unwell from '../components/lottie/unwell';
+import Smoothymon from '../components/lottie/Smoothymon';
+import MoodOverviewHorizontal from './elements/MoodOverviewHorizontal';
+import DashboardSkeleton from './skeletons/DashboardSkeleton';
+import RootCauseInsightCard from './elements/RootCauseInsightCard';
+import SecondaryImpactInsight from './elements/SecondaryImpactInsight';
+import GentleSuggestionCard from './elements/GentleSuggestionCard';
+import ActivityRing from './elements/ActivityRing';
+import Cycler from '../components/lottie/cycler';
+import Mobile from '../components/lottie/Mobile';
+import Bird from '../components/lottie/Bird';
+
+
+
+
+// --- 1. FULLY DEFINED INTERFACE ---
+// Based on your journal page, this is the data structure
+interface JournalEntry {
+  id: string; // Added ID, essential for keys
+  date: string; // e.g., '2025-11-16'
+  mood: number;
+  sleep_quality?: string;
+  sleep_hours?: number;
+  exercise: string[];
+  deal_breaker?: string;
+  productivity?: number;
+  productivity_comparison?: 'Better' | 'Same' | 'Worse';
+  overthinking?: number;
+  special_day?: string;
+  stress_level?: number;
+  diet_status?: 'Okaish' | 'Good' | 'Bad';
+  stress_triggers?: string;
+  main_challenges?: string;
+  daily_summary?: string;
+  social_time?: 'Decent' | 'Less' | 'Zero';
+  negative_thoughts?: 'Yes' | 'No';
+  negative_thoughts_detail?: string;
+  screen_work?: number;
+  screen_entertainment?: number;
+  caffeine_intake?: string;
+  time_outdoors?: string;
+}
+
+export default function DashboardPage() {
+  const [entries, setEntries] = useState<JournalEntry[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [range, setRange] = useState<7 | 30 | 90>(7);
+  const filteredEntries = useMemo(() => {
+    if (!entries.length) return [];
+
+    const now = new Date();
+    const cutoff = new Date();
+    cutoff.setDate(now.getDate() - range + 1);
+
+    return entries.filter(entry => {
+      const entryDate = new Date(entry.date);
+      return entryDate >= cutoff && entryDate <= now;
+    });
+  }, [entries, range]);
+
+  function useIsMobile(breakpoint = 640) {
+    const [isMobile, setIsMobile] = useState(false);
+
+    useEffect(() => {
+      const check = () => setIsMobile(window.innerWidth < breakpoint);
+      check();
+      window.addEventListener("resize", check);
+      return () => window.removeEventListener("resize", check);
+    }, [breakpoint]);
+
+    return isMobile;
+  }
+  const isMobile = useIsMobile();
+
+  const hasEnoughData = filteredEntries.length >= 2;
+  const nivoDarkTheme = useMemo(() => ({
+    axis: {
+      ticks: {
+        text: { fill: '#a1a1aa' },
+        line: {
+          stroke: '#3f3f46',
+          strokeWidth: 1,
+        },
+      },
+      legend: {
+        text: { fill: '#f4f4f5' },
+      },
+      domain: {
+        line: {
+          stroke: '#3f3f46',
+        },
+      },
+    },
+
+    grid: {
+      line: {
+        stroke: 'var(--color-border)',
+        strokeWidth: 1,
+        strokeOpacity: 0.4,
+      },
+    },
+
+
+    legends: {
+      text: { fill: '#f4f4f5' },
+    },
+
+    tooltip: {
+      container: {
+        background: '#27272a',
+        color: '#f4f4f5',
+        borderRadius: 8,
+        boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
+      },
+    },
+  }), []);
+
+
+  // --- 2. INITIALIZED SUPABASE AND ROUTER ---
+  const supabase = createClient();
+  const router = useRouter();
+
+  // --- 3. IMPLEMENTED DATA FETCHING ---
+  useEffect(() => {
+    const fetchEntries = async () => {
+      try {
+        setLoading(true);
+
+        const res = await fetch("/api/journals", { cache: "no-store" });
+
+        if (res.status === 401) {
+          router.push("/auth");
+          return;
+        }
+
+        const json = await res.json();
+
+        if (!res.ok) {
+          console.error(json.error || "Failed to fetch journals");
+          return;
+        }
+
+        setEntries(json.entries as JournalEntry[]);
+      } catch (err) {
+        console.error("Fetch journals error:", err);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchEntries();
+  }, [router]);
+
+
+  // --- 4. IMPLEMENTED DATA PROCESSING (useMemo) ---
+  const moodStressData = useMemo(() => {
+    if (filteredEntries.length === 0) return [];
+    return [
+      {
+        id: 'Mood',
+        data: filteredEntries.map((entry) => ({
+          x: format(parseISO(entry.date), 'MMM dd'),
+          y: entry.mood ?? 0,
+        })),
+      },
+      {
+        id: 'Stress',
+        data: filteredEntries.map((entry) => ({
+          x: format(parseISO(entry.date), 'MMM dd'),
+          y: entry.stress_level ?? 0,
+        })),
+      },
+    ];
+  }, [filteredEntries]);
+
+  const exercisePieData = useMemo(() => {
+    const exerciseCounts: Record<string, number> = {};
+
+    filteredEntries.forEach((entry) => {
+      entry.exercise?.forEach((ex) => {
+        const clean = ex.startsWith('Other:') ? 'Other' : ex;
+        exerciseCounts[clean] = (exerciseCounts[clean] || 0) + 1;
+      });
+    });
+
+    return Object.entries(exerciseCounts).map(([id, value]) => ({
+      id,
+      label: id,
+      value,
+    }));
+  }, [filteredEntries]);
+
+  const screenTimeBarData = useMemo(() => {
+    return filteredEntries.map((entry) => ({
+      date: format(parseISO(entry.date), 'MMM dd'),
+      Work: entry.screen_work ?? 0,
+      Entertainment: entry.screen_entertainment ?? 0,
+    }));
+  }, [filteredEntries]);
+  const moodVolatility = useMemo(() => {
+    if (filteredEntries.length < 2) return 0;
+
+    let totalChange = 0;
+    for (let i = 1; i < filteredEntries.length; i++) {
+      totalChange += Math.abs(
+        (filteredEntries[i].mood ?? 0) -
+        (filteredEntries[i - 1].mood ?? 0)
+      );
+    }
+
+    return (totalChange / (filteredEntries.length - 1)).toFixed(2);
+  }, [filteredEntries]);
+  const bestDay = useMemo(() => {
+    if (!filteredEntries.length) return null;
+    return [...filteredEntries].reduce((best, curr) =>
+      (curr.mood ?? 0) > (best.mood ?? 0) ? curr : best
+    );
+  }, [filteredEntries]);
+
+  const worstDay = useMemo(() => {
+    if (!filteredEntries.length) return null;
+    return [...filteredEntries].reduce((worst, curr) =>
+      (curr.mood ?? 0) < (worst.mood ?? 0) ? curr : worst
+    );
+  }, [filteredEntries]);
+
+  const sleepConsistency = useMemo(() => {
+    if (!filteredEntries.length) return 0;
+
+    const goodSleepDays = filteredEntries.filter(
+      (e) => (e.sleep_hours ?? 0) >= 7
+    ).length;
+
+    return Math.round((goodSleepDays / filteredEntries.length) * 100);
+  }, [filteredEntries]);
+  const exerciseConsistency = useMemo(() => {
+    if (!filteredEntries.length) return 0;
+
+    const exerciseDays = filteredEntries.filter(
+      (e) => e.exercise && e.exercise.length > 0
+    ).length;
+
+    return Math.round((exerciseDays / filteredEntries.length) * 100);
+  }, [filteredEntries]);
+
+  // --- 5. ADDED LOADING & EMPTY STATES ---
+  if (loading) return <DashboardSkeleton />;
+
+  if (entries.length === 0) {
+    return (
+      <div className="h-screen w-full flex flex-col items-center justify-center bg-background text-foreground">
+        <h1 className="text-2xl font-semibold">No journal entries found.</h1>
+        <p className="text-muted-foreground">Go write an entry to see your stats!</p>
+      </div>
+    );
+  }
+
+  // --- 6. IMPLEMENTED NIVO THEME ---
+
+  return (
+    <div className="p-4 md:p-10 bg-background text-foreground min-h-screen">
+      <div className="flex flex-col md:flex-row md:items-center mb-8 gap-4 mt-16">
+        {/* Left */}
+        <h1 className="text-3xl md:text-5xl font-bold text-center md:text-left">
+          Dashboard Reflection
+        </h1>
+
+
+        {/* ECG line: new line in mobile, inline in desktop */}
+        <div className=" hidden md:block w-full md:w-auto md:mx-2">
+          <ECGLine />
+        </div>
+
+        {/* Right: stack in mobile, row in desktop */}
+        <div className="flex flex-col gap-4 w-full md:w-auto md:flex-row md:items-center md:ml-auto">
+          {/* Risk Badge: full width in mobile */}
+          <div className="w-full md:w-auto">
+            <RiskLevelBadge entries={entries} />
+          </div>
+
+          {/* Selector: full width in mobile */}
+          <div className="flex flex-col items-center md:items-center w-full md:w-auto">
+            <TimeRangeSelector value={range} onChange={setRange} />
+            <p className="text-xs text-muted-foreground mt-1">
+              Last {range} days • {filteredEntries.length} entries found
+            </p>
+          </div>
+        </div>
+      </div>
+
+      {/* --- ROW 1: At-a-Glance --- */}
+      {/* ================= ROW 2: LIFESTYLE ANALYTICS ================= */}
+      <div className="relative grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
+
+
+        {/* Weekly Activity */}
+        <div className="bg-card p-4 hover-scale-glow rounded-xl border border-border h-[320px] flex flex-col ">
+          <h2 className="text-lg font-semibold mb-2 text-center">
+            {range === 7
+              ? "Last 7 days Activty"
+              : range === 30
+                ? "Last 30 days Activity"
+                : "Last 3 Months Activity"}
+          </h2>
+
+          <div className="flex-1">
+            <ActivityRing entries={filteredEntries} range={range} allEntries={entries} />
+          </div>
+        </div>
+
+        {/* Exercise Breakdown */}
+        <div className="bg-card p-4 rounded-xl border hover-scale-glow border-border h-[320px] flex flex-col shadow-xl dark:shadow-white/10">
+          <h2 className="text-lg font-semibold mb-2 text-center">
+            Exercise Breakdown
+          </h2>
+
+          <div className="flex-1">
+            {(!exercisePieData || exercisePieData.length === 0) ? (
+              <div className="flex flex-col items-center">
+                <Cycler size={200} />
+                <p className="text-muted-foreground text-center mt-4">
+                  Do some exercise to see breakdown
+                </p>
+              </div>
+
+
+            ) : (
+              <ResponsivePie
+                data={exercisePieData}
+                theme={nivoDarkTheme}
+
+                // ✅ Desktop margin same as your original
+                // ✅ Mobile margin smaller so pie becomes smaller
+                margin={
+                  isMobile
+                    ? { top: 40, right: 80, bottom: 40, left: 80 }
+                    : { top: 20, right: 140, bottom: 20, left: 20 }
+                }
+
+                // ✅ Desktop inner radius same as your original
+                // ✅ Mobile inner radius slightly more (thinner ring = looks smaller)
+                innerRadius={isMobile ? 0.6 : 0.55}
+
+                padAngle={1.2}
+                cornerRadius={4}
+                activeOuterRadiusOffset={10}
+                borderWidth={1}
+                borderColor={{ from: "color", modifiers: [["darker", 1.2]] }}
+
+                arcLinkLabelsSkipAngle={10}
+                arcLabelsSkipAngle={10}
+                arcLinkLabelsTextColor="var(--color-foreground)"
+                arcLinkLabelsColor="var(--color-foreground)"
+                arcLinkLabelsThickness={0.2}
+
+                // ✅ Desktop legend same as before
+                // ✅ Hide legend only on mobile (this prevents ugly overlap)
+                legends={
+                  isMobile
+                    ? []
+                    : [
+                      {
+                        anchor: "right",
+                        direction: "column",
+                        translateX: 40,
+                        itemWidth: 80,
+                        itemHeight: 18,
+                        symbolSize: 12,
+                        itemTextColor: "var(--color-foreground)",
+                      },
+                    ]
+                }
+
+                animate
+                colors={[
+                  "var(--color-chart-1)",
+                  "var(--color-chart-2)",
+                  "var(--color-chart-3)",
+                  "var(--color-chart-4)",
+                  "var(--color-chart-5)",
+                ]}
+              />
+            )}
+          </div>
+        </div>
+
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-8 mb-8 ">
+        {/* Best Day (1/4) */}
+        <div className="bg-card p-6 rounded-xl border border-border min-h-[250px] md:col-span-1 flex flex-col hover-scale-glow">
+
+          {/* Row 1: Title (fixed at top) */}
+          <h2 className="text-xl font-semibold text-center bg-gradient-to-br from-green-500/10 to-transparent rounded-xl">
+            Best Day
+          </h2>
+
+          {/* Row 2: Content (vertically centered) */}
+          <div className="flex-1 flex items-center">
+            <div className="grid grid-cols-1 md:grid-cols-2 items-center gap-4 w-full">
+
+              {/* Left: Emoji */}
+              <div className="flex justify-center">
+                <Smoothymon size={200} />
+              </div>
+
+              {/* Right: Info */}
+              {bestDay && (
+                <div className="flex flex-col items-center md:items-start text-center md:text-left">
+                  <p className="text-4xl font-bold text-green-500">
+                    {bestDay.mood}/10
+                  </p>
+
+                  <p className="mt-2 text-muted-foreground">
+                    {format(parseISO(bestDay.date), 'MMM dd')}
+                  </p>
+
+                  {bestDay.daily_summary && (
+                    <p className="mt-3 text-sm italic text-muted-foreground">
+                      “{bestDay.daily_summary.slice(0, 80)}…”
+                    </p>
+                  )}
+                </div>
+              )}
+
+            </div>
+          </div>
+        </div>
+
+
+        {/* Sleep Consistency (1/2) */}
+        <div className="bg-card p-6 rounded-xl border border-border min-h-[150px] md:col-span-2 hover-scale-glow">
+
+          {/* Row 1: Title */}
+          <h2 className="text-xl font-semibold mb-4 text-center bg-gradient-to-br from-blue-500/10 to-transparent rounded-xl">
+            Sleep Consistency
+          </h2>
+
+          {/* Row 2: 50-50 layout */}
+          <div className="grid grid-cols-1 md:grid-cols-2 items-center gap-4">
+
+            {/* Left: Sleeping Emoji */}
+            <div className="flex justify-center">
+              <SleepingEmoji size={180} />
+            </div>
+
+            {/* Right: Info */}
+            <div className="flex flex-col items-center md:items-start text-center md:text-left">
+              <p className="text-5xl font-bold">
+                {sleepConsistency}%
+              </p>
+
+              <p className="mt-2 text-sm text-muted-foreground">
+                Days with ≥ 7 hours of sleep
+              </p>
+
+              <p
+                className={`mt-3 text-sm font-medium ${sleepConsistency >= 70
+                  ? 'text-green-500'
+                  : sleepConsistency >= 40
+                    ? 'text-yellow-500'
+                    : 'text-red-500'
+                  }`}
+              >
+                {sleepConsistency >= 70
+                  ? 'Good sleep routine'
+                  : sleepConsistency >= 40
+                    ? 'Inconsistent sleep'
+                    : 'Poor sleep discipline'}
+              </p>
+            </div>
+
+          </div>
+        </div>
+        {/* Worst Day (1/4) */}
+        <div className="bg-card p-6 rounded-xl border border-border min-h-[250px] md:col-span-1 flex flex-col hover-scale-glow">
+
+          {/* Row 1: Title */}
+          <h2 className="text-xl font-semibold mb-4 text-center bg-gradient-to-br from-red-500/10 to-transparent rounded-xl">
+            Worst Day
+          </h2>
+
+          {/* Row 2: Centered content */}
+          <div className="flex-1 flex items-center">
+            <div className="grid grid-cols-1 md:grid-cols-2 items-center gap-4 w-full">
+
+              {/* Left: Emoji */}
+              <div className="flex justify-center">
+                <Unwell size={200} />
+              </div>
+
+              {/* Right: Info */}
+              {worstDay && (
+                <div className="flex flex-col items-center md:items-start text-center md:text-left">
+                  <p className="text-4xl font-bold text-red-500">
+                    {worstDay.mood}/10
+                  </p>
+
+                  <p className="mt-2 text-muted-foreground">
+                    {format(parseISO(worstDay.date), 'MMM dd')}
+                  </p>
+
+                  {worstDay.main_challenges && (
+                    <p className="mt-3 text-sm italic text-muted-foreground">
+                      “{worstDay.main_challenges.slice(0, 80)}…”
+                    </p>
+                  )}
+                </div>
+              )}
+
+            </div>
+          </div>
+        </div>
+
+
+      </div>
+      {/* --- ROW 2 & 3: Main Chart Grid --- */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+
+        {/* Mood & Stress */}
+        <div className="bg-card p-8 rounded-xl border border-border h-[400px] md:h-[500px] hover-scale-glow">
+
+          <h2 className="text-xl font-semibold mb-4">Mood & Stress Over Time</h2>
+          {hasEnoughData ? (
+            <div className="h-full">
+              <ResponsiveLine
+                data={moodStressData}
+
+                /* ===== THEME ===== */
+                theme={nivoDarkTheme}
+
+                /* ===== LAYOUT ===== */
+                margin={{ top: 90, right: 40, bottom: 110, left: 60 }}   // ✅ more top space
+
+                /* ===== SCALES ===== */
+                xScale={{ type: 'point' }}
+                yScale={{
+                  type: 'linear',
+                  min: 0,
+                  max: 10,
+                  stacked: false,
+                  reverse: false,
+                }}
+
+                /* ===== AXES ===== */
+                axisBottom={{
+                  tickSize: 5,
+                  tickPadding: 10,
+                  tickRotation: -45, // Rotates labels to prevent overlap
+
+                  /* DYNAMIC TICK FILTERING:
+                    If data is large (e.g., > 14 days), show only every 5th label.
+                    Otherwise, show all labels.
+                  */
+                  tickValues: screenTimeBarData.length > 14 ? "every 5 days" : undefined,
+
+                  format: (value) => {
+                    // Shortens "2024-05-01" to "May 1" to save space
+                    return new Date(value).toLocaleDateString(undefined, {
+                      month: 'short',
+                      day: 'numeric',
+                    });
+                  },
+
+                  legend: 'Date',
+                  legendPosition: 'middle',
+                  legendOffset: 70, // Increased offset so it doesn't collide with rotated ticks
+                }}
+                axisLeft={{
+                  tickSize: 5,
+                  tickPadding: 6,
+                  tickRotation: 0,
+                  legend: 'Level (0–10)',
+                  legendOffset: -45,
+                  legendPosition: 'middle',
+                }}
+
+                /* ===== GRID ===== */
+                enableGridX={false}
+                enableGridY={true}
+
+                /* ===== LINE STYLE ===== */
+                curve="monotoneX"
+
+                /* ===== COLORS (SEMANTIC) ===== */
+                colors={(d) =>
+                  d.id === 'Mood'
+                    ? 'var(--color-chart-1)'
+                    : 'var(--color-chart-2)'
+                }
+
+                /* ===== POINTS ===== */
+                pointSize={6}
+                pointColor="white"
+                pointBorderWidth={3}
+                pointBorderColor={{ from: 'serieColor' }}
+                pointLabelYOffset={-12}
+                enableArea={true}
+                areaOpacity={0.08}
+                areaBlendMode="normal"
+
+                /* ===== INTERACTION ===== */
+                useMesh={true}
+                enableSlices="x"
+                sliceTooltip={({ slice }) => (
+                  <div className="bg-background border border-border rounded-md p-2 text-xs">
+                    {slice.points.map((point) => (
+                      <div key={point.id} className="flex gap-2 items-center">
+                        <span
+                          className="w-2 h-2 rounded-full"
+                          style={{ background: point.seriesColor }}
+                        />
+                        <span className="text-muted-foreground">
+                          {point.seriesId}:
+                        </span>
+                        <span className="font-medium">{point.data.y}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                /* ===== LEGEND ===== */
+                legends={[
+                  {
+                    anchor: 'top',          // ✅ upper
+                    direction: 'row',       // ✅ horizontal (same clean style)
+                    justify: false,
+                    translateX: 0,
+                    translateY: -55,        // ✅ outside chart
+                    itemsSpacing: 6,
+                    itemWidth: 80,
+                    itemHeight: 18,
+                    itemDirection: 'left-to-right',
+                    itemOpacity: 0.85,
+                    symbolSize: 10,
+                    symbolShape: 'square',
+                  },
+                ]}
+
+                /* ===== ANIMATION ===== */
+                animate={true}
+                motionConfig="gentle"
+              />
+            </div>
+
+          ) : (
+            <div className="flex flex-1 flex-col items-center justify-center text-center text-muted-foreground">
+              <Bird size={350} />
+              <p>Add more entries to see trends</p>
+            </div>
+          )}
+        </div>
+        {/* Screen Time */}
+        <div className="bg-card p-6 rounded-xl border border-border h-[400px] md:h-[500px] hover-scale-glow">
+          <h2 className="text-xl font-semibold mb-4">
+            Screen Time (Work vs. Entertainment)
+          </h2>
+
+          {screenTimeBarData?.length > 1 ? (
+            <ResponsiveBar
+              data={screenTimeBarData}
+              theme={nivoDarkTheme}
+              keys={['Work', 'Entertainment']}
+              indexBy="date"
+              margin={{ top: 90, right: 40, bottom: 110, left: 60 }}
+              padding={0.4}
+              groupMode="stacked"
+              valueScale={{ type: 'linear' }}
+              indexScale={{ type: 'band', round: true }}
+              colors={({ id }) => (id === 'Work' ? '#3b82f6' : '#f97316')}
+
+              axisBottom={{
+                tickSize: 5,
+                tickPadding: 6,
+                tickRotation: -45, // Tilt for better fit
+                // Use a number to limit the total labels shown (e.g., max 10 ticks)
+                tickValues: screenTimeBarData.length > 20 ? 10 : undefined,
+                format: (value) => {
+                  // Show shorter date format
+                  return new Date(value).toLocaleDateString(undefined, {
+                    month: 'short',
+                    day: 'numeric'
+                  });
+                },
+                legend: 'Date',
+                legendPosition: 'middle',
+                legendOffset: 60, // Pushed down to avoid hitting rotated labels
+              }}
+              axisLeft={{
+                tickSize: 5,
+                tickPadding: 6,
+                tickRotation: 0,
+                legend: 'Hours',
+                legendPosition: 'middle',
+                legendOffset: -45,
+              }}
+
+              enableGridX={false}
+              enableGridY={true}
+
+              borderRadius={6}
+              borderColor={{
+                from: 'color',
+                modifiers: [['darker', 1.3]],
+              }}
+
+              enableLabel={false}
+              enableTotals={true}
+              totalsOffset={10}
+
+              tooltip={({ id, value, color, indexValue }) => (
+                <div className="rounded-lg border border-border bg-background/95 backdrop-blur px-3 py-2 text-xs shadow-md">
+                  <div className="mb-1 text-[11px] text-muted-foreground text-center">
+                    {indexValue}
+                  </div>
+
+                  <div className="flex items-center justify-between gap-4">
+                    <div className="flex items-center gap-2">
+                      <span
+                        className="h-2 w-2 rounded-full"
+                        style={{ backgroundColor: color }}
+                      />
+                      <span className="capitalize text-muted-foreground">{id}</span>
+                    </div>
+                    <span className="font-semibold">{value}h</span>
+                  </div>
+                </div>
+              )}
+
+              legends={[
+                {
+                  dataFrom: 'keys',
+                  anchor: 'top',
+                  direction: 'row',
+                  translateX: 0,
+                  translateY: -55,
+                  itemWidth: 90,
+                  itemHeight: 18,
+                  itemsSpacing: 6,
+                  symbolSize: 10,
+                  itemOpacity: 0.85,
+                },
+              ]}
+
+              animate={true}
+              motionConfig="gentle"
+            />
+          ) : (
+            <div className="flex flex-1 flex-col items-center justify-center text-center text-muted-foreground">
+              <Mobile size={350} />
+              <p>Add more entries to see trends</p>
+            </div>
+
+          )}
+        </div>
+
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-8 my-8 ">
+        <div className="bg-card p-6 rounded-xl border border-border min-h-[160px] md:col-span-3 hover-scale-glow">
+          <MoodOverviewHorizontal />
+
+        </div>
+        <RootCauseInsightCard entries={filteredEntries} />
+        <SecondaryImpactInsight entries={filteredEntries} />
+        <GentleSuggestionCard entries={filteredEntries} />
+      </div>
+
+
+    </div>
+  );
+}
